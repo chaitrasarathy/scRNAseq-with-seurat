@@ -6,4 +6,9 @@ This is a generic pipeline to analyse scRNAseq data
 (sub) dataset from Allen Institute
 
 ## Packages used
-Seurat 
+[Seurat](https://satijalab.org/seurat/) 
+
+# Other resources
+[Differential expression testing](https://satijalab.org/seurat/articles/de_vignette.html)
+
+[Data visualization](https://satijalab.org/seurat/articles/visualization_vignette.html)
