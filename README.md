@@ -12,3 +12,6 @@ This is a generic pipeline to analyse scRNAseq data
 [Differential expression testing](https://satijalab.org/seurat/articles/de_vignette.html)
 
 [Data visualization](https://satijalab.org/seurat/articles/visualization_vignette.html)
+
+# Further reading
+[Guidelines for the computational analysis of single-cell RNA sequencing data](https://www.nature.com/articles/s41596-020-00409-w)
