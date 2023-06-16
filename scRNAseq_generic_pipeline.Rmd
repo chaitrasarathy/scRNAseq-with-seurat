@@ -1,0 +1,220 @@
+---
+title: "Pipeline for scRNA-seq analysis using Seurat with (mini) dataset from Allen Institute "
+output: html_document
+---
+
+### Load packages
+```{r}
+#install.packages("tidyverse")
+library(tidyverse)
+
+#install.packages("Seurat")
+library(Seurat)
+```
+
+## Analysis
+### Loading data and creating the Seurat object
+```{r}
+# load metadata and count matrix
+hum_meta <- read.csv("AIBS_human_meta_mini.csv", row.names = 1)
+hum_counts <- read.csv("AIBS_human_counts_mini.csv", row.names = 1)
+row.names(hum_meta) <- hum_meta$sample_name #necessary for matching between counts and metadata in Seurat object
+
+# create Seurat object
+Seu_hum <- CreateSeuratObject(counts = t(hum_counts), meta.data = hum_meta) # t(hum_counts) transposes so that we have rows as genes and columns as samples as they should be for Seurat
+
+rm(hum_counts, hum_meta) # removing large matrices now that we have Seurat obj
+```
+
+### How to accses seurat's identity class
+```{r}
+Idents(Seu_hum) #interacts with active.ident part of seurat obj, by default without providing orig.ident, pulls string before _
+Seu_hum@active.ident #same as above
+```
+
+### Processing Seurat object
+
+#### Normalization
+*NormalizeData()* normalizes the gene expression values in the Seurat object Seu_hum using the "LogNormalize" method. It applies a logarithmic transformation to the data and scales the expression values by a factor of 1,000,000 (scale.factor) to make them more comparable across cells.
+
+Normalization is necessary to remove technical variations and biases in the data that could arise from differences in sequencing depth or cell size. CPM or counts per million is the most common scale factor used in this context to achieve a reasonable range of expression values for subsequent analyses.
+
+```{r}
+Seu_hum <- NormalizeData(Seu_hum, normalization.method = "LogNormalize", scale.factor = 1000000) #changing scale.factor to mil so we get CPM
+
+#look at normalized data
+Seu_hum@assays$RNA@data 
+```
+
+#### Find variable features
+*FindVariableFeatures()* identifies highly variable features (genes) in the dataset using the variance-stabilizing transformation (VST) method. The nfeatures parameter specifies the number of top variable features to select (in this case, 2000).
+
+Identifying variable features is important for downstream analyses as it helps focus on genes that show meaningful variation across cells and can be informative for distinguishing different cell types or states. The choice of nfeatures depends on the dataset and the desired balance between capturing a sufficient number of informative genes and avoiding noisy or uninformative genes.
+
+```{r}
+Seu_hum <- FindVariableFeatures(Seu_hum, selection.method = "vst", nfeatures = 2000) #should see effect of changing nfeatures
+
+#look at most variable features
+Seu_hum@assays$RNA@var.features 
+```
+
+#### Scale data
+*ScaleData()* scales the gene expression values of the selected variable features in the Seurat object. It standardizes the expression values to have zero mean and unit variance.
+
+Scaling the data is necessary to remove the impact of differences in expression magnitude between genes and to ensure that genes with large expression values do not dominate the subsequent analyses. Scaling is typically performed before applying dimensionality reduction techniques.
+```{r}
+Seu_hum <- ScaleData(Seu_hum, verbose = FALSE)
+```
+
+#### Run Principal Component Analysis (PCA)
+*RunPCA()* performs Principal Component Analysis (PCA) on the scaled data in Seu_hum. The npcs parameter specifies the number of principal components to compute (in this case, 50).
+
+PCA reduces the dimensionality of the data by identifying linear combinations of genes (principal components) that capture the most significant sources of variation. The choice of npcs depends on the complexity and heterogeneity of the dataset. Exploratory analyses like an Elbow Plot can help in determining an appropriate number of principal components to retain.
+```{r}
+Seu_hum <- RunPCA(Seu_hum, npcs = 50, verbose = FALSE) #50 is default, we could choose something smaller based on ElbowPlot below
+
+ElbowPlot(Seu_hum, ndims=50) #see SD of each PC, shows how much explained, use to see how many PC needed to best explain data
+#cut at the elbow (can argue where cutoff is, might choose 7 or 20)
+```
+
+#### Find neighbors
+*FindNeighbors()* identifies cell neighbors based on the PCA-reduced data in Seu_hum. The dims parameter specifies the subset of principal components to use for neighbor finding (in this case, components 1 to 20).
+
+Finding cell neighbors is crucial for subsequent clustering and visualization analyses. The choice of dims depends on the number of informative principal components that capture the most significant variation in the dataset. It is often determined based on the results of the PCA and the desired trade-off between preserving biological variation and reducing noise.
+```{r}
+Seu_hum <- FindNeighbors(Seu_hum, reduction = "pca", dims = 1:20)
+```
+
+#### Find clusters
+*FindClusters()* performs clustering analysis on the identified cell neighbors in Seu_hum. The resolution parameter determines the granularity of the clustering (in this case, 0.5).
+
+Clustering groups similar cells together based on their gene expression profiles. The choice of resolution affects the number and size of the resulting clusters.
+```{r}
+Seu_hum <- FindClusters(Seu_hum, resolution = 0.5) #nm.method and annoy.metric have drastic effects on cluster creation
+
+table(Seu_hum$seurat_clusters) #tells you number of cells in each cluster
+table(Seu_hum$seurat_clusters, Seu_hum$class_label) #number of cells per class per cluster
+table(Seu_hum$seurat_clusters, Seu_hum$subclass_label) #number of cells per subclass per cluster
+```
+
+#### Run UMAP
+*RunUMAP()* computes the Uniform Manifold Approximation and Projection (UMAP) embedding on the PCA-reduced data in Seu_hum. UMAP is a dimensionality reduction technique that helps visualize the high-dimensional data in a lower-dimensional space. The reduction parameter specifies the reduction method used for UMAP (in this case, "pca"), and the dims parameter specifies the subset of principal components to use for the UMAP computation (in this case, components 1 to 20).
+
+Considerations for choosing the best values for these parameters involve understanding the dataset, the biological question of interest, and exploring the impact of parameter choices on the analysis results. It may require iterative experimentation and evaluation to optimize the parameter values for specific analysis goals, such as identifying relevant features, capturing variation, defining clusters, and obtaining informative visualizations.
+```{r}
+Seu_hum <- RunUMAP(Seu_hum, reduction = "pca", dims = 1:20)
+
+# visualizing clusters
+DimPlot(Seu_hum, reduction = "umap", group.by = "subclass_label", label=TRUE)
+DimPlot(Seu_hum, reduction = "umap", group.by = "seurat_clusters", label=TRUE, repel=TRUE)
+```
+
+*DimPlot()* creates a visualization of the cells in a two-dimensional space based on the UMAP reduction. Each cell is represented as a point, and the points are colored according to their assigned subclass label or cluster.
+
+This type of plot can be useful to:
+* Visualize the distribution and spatial arrangement of different cell types or clusters in the dataset.
+* Identify clusters or groupings of cells that share similar characteristics.
+* Assess the separation or overlap of cell types/clusters in the UMAP space.
+* Investigate potential relationships or transitions between cell types.
+
+### Differential expression analysis
+#### Finding cluster marker genes
+*FindMarkers()* identifies genes that are differentially expressed between one cluster and all other clusters. The parameters ident.1, logfc.threshold, and min.pct specify the cluster to compare against, the minimum log-fold change threshold, and the minimum percentage of cells expressing the gene, respectively. This step helps identify genes that can potentially distinguish one cluster from other clusters, and can be used for cell type annotation.
+
+*FindAllMarkers()* will perform the above for all clusters at once.
+
+```{r}
+Idents(Seu_hum) <- "seurat_clusters" #set active identity to our newly defined clusters, these are what we want to compare in the following steps
+
+# get genes to distinguish cluster 8 from 3
+cluster_8_v_3 <- FindMarkers(Seu_hum, ident.1 = 8, ident.2 = 3, logfc.threshold = log(2), min.pct = 0.50)
+
+# genes to distinguish cluster 8, 2, or 13 from all other clusters
+cluster_8_v_all <- FindMarkers(Seu_hum, ident.1 = 8, logfc.threshold = log(2), min.pct = 0.50)
+cluster_2_v_all <- FindMarkers(Seu_hum, ident.1 = 2, logfc.threshold = log(2), min.pct = 0.50)
+cluster_13_v_all <- FindMarkers(Seu_hum, ident.1 = 2, logfc.threshold = log(2), min.pct = 0.50)
+
+# finding marker genes for all clusters, alternative to running one-by-one as done for 8, 2, 13 (takes a while to run)
+all_clusters <- FindAllMarkers(Seu_hum, logfc.threshold = log(2), min.pct = 0.50)
+
+# taking a look at most significantly DE marker genes
+cluster_8_v_3  %>% 
+  arrange(p_val_adj)
+cluster_8_v_all %>% 
+  arrange(p_val_adj)
+cluster_2_v_all %>% 
+  arrange(p_val_adj)
+
+# two different ways of looking for a specific gene in the output dataframes, where genes are rownames
+cluster_2_v_all %>% 
+  filter(row.names(.)=="GRIN1")
+
+cluster_2_v_all %>% 
+  rownames_to_column("gene_name") %>% 
+  filter(gene_name=="GRIN1")
+```
+
+#### Using metadata for other comparisons
+Let's say we aren't just interested in comparing between clusters, but also comparing between clusters derived from male vs. female donors. Could also think to do this if certain cells come from control vs. experiment donors, or healthy vs disorder, etc.
+
+Assume that we've performed cell type annotation for all of our cells using the clusters we've defined and their marker genes, and these are now stored in "subclass_label" in our metadata.
+```{r}
+# making new metadata column to see if any sex differences for the same cell type
+Seu_hum@meta.data <- Seu_hum@meta.data %>% 
+  mutate(sex_subclass = paste(donor_sex_label, subclass_label, sep="_"))
+
+table(Seu_hum$sex_subclass) #see how many cells we have for each sex+subclass combo
+
+Idents(Seu_hum) <- "sex_subclass" #setting this new column as our active identity
+
+unique(Idents(Seu_hum)) #seeing what our options are for making comparisons
+
+#finding genes that are DE in female-derived microglia vs male-derived
+F_microglia_vs_M_microglia <- FindMarkers(Seu_hum, ident.1 = "F_Microglia", ident.2 = "M_Microglia", 
+                                          logfc.threshold = log(2), min.pct = 0.25)
+
+F_microglia_vs_M_microglia %>% 
+  arrange(p_val_adj)
+
+Seu_hum@assays$RNA@counts["GFAP",] #checking if a gene is present in our counts matrix
+```
+
+### Visualizations
+```{r}
+#getting top 6 marker genes for distinguishing cluster 8 cells, saving to plot below
+features <- cluster_8_v_all %>% 
+  arrange(p_val_adj) %>% 
+  head(n=6) %>% 
+  row.names()
+
+Idents(Seu_hum) <- "seurat_clusters" #setting our active identity back to our clusters
+```
+
+#### Violin Plot
+*VlnPlot()* generates a violin plot to visualize the expression distribution of the selected marker genes (features) across different clusters. This plot provides insights into the expression patterns and variations of these genes within each cluster, including the specific expression levels and the presence of bimodal or skewed distributions.
+
+```{r}
+VlnPlot(Seu_hum, features = features)
+```
+
+#### Feature Plot
+*FeaturePlot()* creates a feature plot to visualize the expression of the selected marker genes (features) in a scatterplot-like format. This plot displays the expression levels of the genes on the x-axis and the fraction of cells expressing the genes on the y-axis, with each dot representing a cell. It helps visualize the cell-to-cell variation in gene expression and identify potential correlations or differences between clusters.
+
+```{r}
+FeaturePlot(Seu_hum, features = features)
+```
+
+#### Dot Plot
+*DotPlot()* generates a dot plot to visualize the expression of the selected marker genes (features) in a matrix-like format. Each row represents a gene, each column represents a cluster, and the size/color of the dots indicates the gene expression level. This plot helps identify genes that are specifically expressed or enriched in cluster 8 compared to other clusters.
+
+```{r}
+DotPlot(Seu_hum, features = features) + RotatedAxis()
+```
+
+#### Heat Map
+*DoHeatmap()* creates a heat map to visualize the expression patterns of the selected marker genes (features) across cells. The heat map represents the gene expression values as a color-coded matrix, with rows corresponding to genes and columns corresponding to cells. It provides a comprehensive view of gene expression similarities and differences across cells and clusters.
+
+```{r}
+DoHeatmap(subset(Seu_hum, downsample = 100), features = features, size = 3, slot="data") +
+  scale_fill_viridis_c()
+```
